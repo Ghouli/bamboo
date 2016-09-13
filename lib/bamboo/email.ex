@@ -86,6 +86,7 @@ defmodule Bamboo.Email do
       html_body: nil,
       text_body: nil,
       headers: %{},
+      attachments: [],
       assigns: %{},
       private: %{}
 
@@ -199,5 +200,9 @@ defmodule Bamboo.Email do
   @spec put_private(__MODULE__.t, atom, any) :: __MODULE__.t
   def put_private(%Email{private: private} = email, key, value) do
     %{email | private: Map.put(private, key, value)}
+  end
+
+  def put_attachment(%__MODULE__{attachments: attachments} = email, path, opts \\ []) do
+    %{email | attachments: [Bamboo.Attachment.new(path, opts) | attachments]}
   end
 end
