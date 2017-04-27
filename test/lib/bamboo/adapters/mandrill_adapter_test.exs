@@ -18,9 +18,9 @@ defmodule Bamboo.MandrillAdapterTest do
     plug :dispatch
 
     def start_server(parent) do
-      Agent.start_link(fn -> HashDict.new end, name: __MODULE__)
-      Agent.update(__MODULE__, &HashDict.put(&1, :parent, parent))
-      port = get_free_port
+      Agent.start_link(fn -> Map.new end, name: __MODULE__)
+      Agent.update(__MODULE__, &Map.put(&1, :parent, parent))
+      port = get_free_port()
       Application.put_env(:bamboo, :mandrill_base_uri, "http://localhost:#{port}")
       Plug.Adapters.Cowboy.http __MODULE__, [], port: port, ref: __MODULE__
     end
@@ -51,14 +51,14 @@ defmodule Bamboo.MandrillAdapterTest do
     end
 
     defp send_to_parent(conn) do
-      parent = Agent.get(__MODULE__, fn(set) -> HashDict.get(set, :parent) end)
+      parent = Agent.get(__MODULE__, fn(set) -> Map.get(set, :parent) end)
       send parent, {:fake_mandrill, conn}
       conn
     end
   end
 
   setup do
-    FakeMandrill.start_server(self)
+    FakeMandrill.start_server(self())
 
     on_exit fn ->
       FakeMandrill.shutdown
@@ -78,7 +78,7 @@ defmodule Bamboo.MandrillAdapterTest do
   end
 
   test "deliver/2 sends the to the right url" do
-    new_email |> MandrillAdapter.deliver(@config)
+    new_email() |> MandrillAdapter.deliver(@config)
 
     assert_receive {:fake_mandrill, %{request_path: request_path}}
 
@@ -86,7 +86,7 @@ defmodule Bamboo.MandrillAdapterTest do
   end
 
   test "deliver/2 sends the to the right url for templates" do
-    new_email |> MandrillHelper.template("hello") |> MandrillAdapter.deliver(@config)
+    new_email() |> MandrillHelper.template("hello") |> MandrillAdapter.deliver(@config)
 
     assert_receive {:fake_mandrill, %{request_path: request_path}}
 
@@ -133,7 +133,7 @@ defmodule Bamboo.MandrillAdapterTest do
   end
 
   test "deliver/2 adds extra params to the message " do
-    email = new_email |> MandrillHelper.put_param("important", true)
+    email = new_email() |> MandrillHelper.put_param("important", true)
 
     email |> MandrillAdapter.deliver(@config)
 
@@ -142,7 +142,7 @@ defmodule Bamboo.MandrillAdapterTest do
   end
 
   test "deliver/2 puts template name and empty content" do
-    email = new_email |> MandrillHelper.template("hello")
+    email = new_email() |> MandrillHelper.template("hello")
 
     email |> MandrillAdapter.deliver(@config)
 
@@ -152,7 +152,7 @@ defmodule Bamboo.MandrillAdapterTest do
   end
 
   test "deliver/2 puts template name and content" do
-    email = new_email |> MandrillHelper.template("hello", [
+    email = new_email() |> MandrillHelper.template("hello", [
       %{name: 'example name', content: 'example content'}
     ])
 
@@ -166,7 +166,7 @@ defmodule Bamboo.MandrillAdapterTest do
   test "raises if the response is not a success" do
     email = new_email(from: "INVALID_EMAIL")
 
-    assert_raise Bamboo.MandrillAdapter.ApiError, fn ->
+    assert_raise Bamboo.ApiError, fn ->
       email |> MandrillAdapter.deliver(@config)
     end
   end
@@ -174,7 +174,7 @@ defmodule Bamboo.MandrillAdapterTest do
   test "removes api key from error output" do
     email = new_email(from: "INVALID_EMAIL")
 
-    assert_raise Bamboo.MandrillAdapter.ApiError, ~r/"key" => "\[FILTERED\]"/, fn ->
+    assert_raise Bamboo.ApiError, ~r/"key" => "\[FILTERED\]"/, fn ->
       email |> MandrillAdapter.deliver(@config)
     end
   end

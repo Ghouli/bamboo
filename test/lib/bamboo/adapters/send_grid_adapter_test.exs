@@ -1,10 +1,10 @@
-defmodule Bamboo.SendgridAdapterTest do
+defmodule Bamboo.SendGridAdapterTest do
   use ExUnit.Case
   alias Bamboo.Email
-  alias Bamboo.SendgridAdapter
+  alias Bamboo.SendGridAdapter
 
-  @config %{adapter: SendgridAdapter, api_key: "123_abc"}
-  @config_with_bad_key %{adapter: SendgridAdapter, api_key: nil}
+  @config %{adapter: SendGridAdapter, api_key: "123_abc"}
+  @config_with_bad_key %{adapter: SendGridAdapter, api_key: nil}
 
   defmodule FakeSendgrid do
     use Plug.Router
@@ -17,9 +17,9 @@ defmodule Bamboo.SendgridAdapterTest do
     plug :dispatch
 
     def start_server(parent) do
-      Agent.start_link(fn -> HashDict.new end, name: __MODULE__)
-      Agent.update(__MODULE__, &HashDict.put(&1, :parent, parent))
-      port = get_free_port
+      Agent.start_link(fn -> Map.new end, name: __MODULE__)
+      Agent.update(__MODULE__, &Map.put(&1, :parent, parent))
+      port = get_free_port()
       Application.put_env(:bamboo, :sendgrid_base_uri, "http://localhost:#{port}")
       Plug.Adapters.Cowboy.http __MODULE__, [], port: port, ref: __MODULE__
     end
@@ -43,14 +43,14 @@ defmodule Bamboo.SendgridAdapterTest do
     end
 
     defp send_to_parent(conn) do
-      parent = Agent.get(__MODULE__, fn(set) -> HashDict.get(set, :parent) end)
+      parent = Agent.get(__MODULE__, fn(set) -> Map.get(set, :parent) end)
       send parent, {:fake_sendgrid, conn}
       conn
     end
   end
 
   setup do
-    FakeSendgrid.start_server(self)
+    FakeSendgrid.start_server(self())
 
     on_exit fn ->
       FakeSendgrid.shutdown
@@ -61,16 +61,16 @@ defmodule Bamboo.SendgridAdapterTest do
 
   test "raises if the api key is nil" do
     assert_raise ArgumentError, ~r/no API key set/, fn ->
-      new_email(from: "foo@bar.com") |> SendgridAdapter.deliver(@config_with_bad_key)
+      new_email(from: "foo@bar.com") |> SendGridAdapter.deliver(@config_with_bad_key)
     end
 
     assert_raise ArgumentError, ~r/no API key set/, fn ->
-      SendgridAdapter.handle_config(%{})
+      SendGridAdapter.handle_config(%{})
     end
   end
 
   test "deliver/2 sends the to the right url" do
-    new_email |> SendgridAdapter.deliver(@config)
+    new_email() |> SendGridAdapter.deliver(@config)
 
     assert_receive {:fake_sendgrid, %{request_path: request_path}}
 
@@ -86,7 +86,7 @@ defmodule Bamboo.SendgridAdapterTest do
     )
     |> Email.put_header("Reply-To", "reply@foo.com")
 
-    email |> SendgridAdapter.deliver(@config)
+    email |> SendGridAdapter.deliver(@config)
 
     assert_receive {:fake_sendgrid, %{params: params, req_headers: headers}}
 
@@ -105,7 +105,7 @@ defmodule Bamboo.SendgridAdapterTest do
       bcc: [{"BCC", "bcc@bar.com"}],
     )
 
-    email |> SendgridAdapter.deliver(@config)
+    email |> SendGridAdapter.deliver(@config)
 
     assert_receive {:fake_sendgrid, %{params: params}}
     assert params["to"] == ["to@bar.com", "noname@bar.com"]
@@ -116,19 +116,56 @@ defmodule Bamboo.SendgridAdapterTest do
     assert params["bccname"] == ["BCC"]
   end
 
+  test "deliver/2 correctly handles templates" do
+    email = new_email(
+      from: {"From", "from@foo.com"},
+      subject: "My Subject",
+    )
+
+    email
+    |> Bamboo.SendGridHelper.with_template("a4ca8ac9-3294-4eaf-8edc-335935192b8d")
+    |> Bamboo.SendGridHelper.substitute("%foo%", "bar")
+    |> SendGridAdapter.deliver(@config)
+
+    assert_receive {:fake_sendgrid, %{params: params}}
+    assert params["text"] == " "
+    assert Poison.decode(params["x-smtpapi"]) == {:ok, %{
+        "sub" => %{
+          "%foo%" => ["bar"]
+        },
+        "filters" => %{
+          "templates" => %{
+            "settings" => %{
+              "enable" => 1,
+              "template_id" => "a4ca8ac9-3294-4eaf-8edc-335935192b8d"
+            }
+          }
+        }
+      }}
+  end
+
+  test "deliver/2 correctly formats reply-to from headers" do
+    email = new_email(headers: %{"reply-to" => "foo@bar.com"})
+
+    email |> SendGridAdapter.deliver(@config)
+
+    assert_receive {:fake_sendgrid, %{params: params}}
+    assert params["replyto"] == "foo@bar.com"
+  end
+
   test "raises if the response is not a success" do
     email = new_email(from: "INVALID_EMAIL")
 
-    assert_raise Bamboo.SendgridAdapter.ApiError, fn ->
-      email |> SendgridAdapter.deliver(@config)
+    assert_raise Bamboo.ApiError, fn ->
+      email |> SendGridAdapter.deliver(@config)
     end
   end
 
   test "removes api key from error output" do
     email = new_email(from: "INVALID_EMAIL")
 
-    assert_raise Bamboo.SendgridAdapter.ApiError, ~r/"key" => "\[FILTERED\]"/, fn ->
-      email |> SendgridAdapter.deliver(@config)
+    assert_raise Bamboo.ApiError, ~r/"key" => "\[FILTERED\]"/, fn ->
+      email |> SendGridAdapter.deliver(@config)
     end
   end
 

@@ -1,15 +1,20 @@
-defmodule Bamboo.SendgridAdapter do
+defmodule Bamboo.SendGridAdapter do
   @moduledoc """
   Sends email using SendGrid's JSON API.
 
   Use this adapter to send emails through SendGrid's API. Requires that an API
   key is set in the config.
 
+  If you would like to add a replyto header to your email, then simply pass it in
+  using the header property or put_header function like so:
+
+      put_header("reply-to", "foo@bar.com")
+
   ## Example config
 
       # In config/config.exs, or config.prod.exs, etc.
       config :my_app, MyApp.Mailer,
-        adapter: Bamboo.SendgridAdapter,
+        adapter: Bamboo.SendGridAdapter,
         api_key: "my_api_key"
 
       # Define a Mailer. Maybe in lib/my_app/mailer.ex
@@ -18,58 +23,27 @@ defmodule Bamboo.SendgridAdapter do
       end
   """
 
+  @service_name "SendGrid"
   @default_base_uri "https://api.sendgrid.com/api"
   @send_message_path "/mail.send.json"
   @behaviour Bamboo.Adapter
 
   alias Bamboo.Email
-
-  defmodule ApiError do
-    defexception [:message]
-
-    def exception(%{message: message}) do
-      %ApiError{message: message}
-    end
-
-    def exception(%{params: params, response: response}) do
-      filtered_params = params |> Plug.Conn.Query.decode |> Map.put("key", "[FILTERED]")
-
-      message = """
-      There was a problem sending the email through the SendGrid API.
-
-      Here is the response:
-
-      #{inspect response, limit: :infinity}
-
-      Here are the params we sent:
-
-      #{inspect filtered_params, limit: :infinity}
-
-      If you are deploying to Heroku and using ENV variables to handle your API key,
-      you will need to explicitly export the variables so they are available at compile time.
-      Add the following configuration to your elixir_buildpack.config:
-
-      config_vars_to_export=(
-        DATABASE_URL
-        SENDGRID_API_KEY
-      )
-      """
-      %ApiError{message: message}
-    end
-  end
+  import Bamboo.ApiError
 
   def deliver(email, config) do
     api_key = get_key(config)
     body = email |> to_sendgrid_body |> Plug.Conn.Query.encode
-    url = [base_uri, @send_message_path]
+    url = [base_uri(), @send_message_path]
 
     case :hackney.post(url, headers(api_key), body, [:with_body]) do
       {:ok, status, _headers, response} when status > 299 ->
-        raise(ApiError, %{params: body, response: response})
+        filtered_params = body |> Plug.Conn.Query.decode |> Map.put("key", "[FILTERED]")
+        raise_api_error(@service_name, response, filtered_params)
       {:ok, status, headers, response} ->
         %{status_code: status, headers: headers, body: response}
       {:error, reason} ->
-        raise(ApiError, %{message: inspect(reason)})
+        raise_api_error(inspect(reason))
     end
   end
 
@@ -110,11 +84,13 @@ defmodule Bamboo.SendgridAdapter do
     %{}
     |> put_from(email)
     |> put_to(email)
+    |> put_reply_to(email)
     |> put_cc(email)
     |> put_bcc(email)
     |> put_subject(email)
     |> put_html_body(email)
     |> put_text_body(email)
+    |> maybe_put_x_smtp_api(email)
   end
 
   defp put_from(body, %Email{from: {"", address}}), do: Map.put(body, :from, address)
@@ -154,6 +130,37 @@ defmodule Bamboo.SendgridAdapter do
 
   defp put_text_body(body, %Email{text_body: nil}), do: body
   defp put_text_body(body, %Email{text_body: text_body}), do: Map.put(body, :text, text_body)
+
+  defp put_reply_to(body, %Email{headers: %{"reply-to" => reply_to}}) do
+    Map.put(body, :replyto, reply_to)
+  end
+  defp put_reply_to(body, _), do: body
+
+  defp maybe_put_x_smtp_api(body, %Email{private: %{"x-smtpapi" => fields}} = email) do
+    # SendGrid will error with empty bodies, even while using templates.
+    # Sets a default `text_body` and 'html_body' if either are not specified,
+    # allowing the consumer to neglect doing so themselves.
+    body = if is_nil(email.text_body) do
+      put_text_body(body, %Email{email | text_body: " "})
+    else
+      body
+    end
+
+    body = if is_nil(email.html_body) do
+      put_html_body(body, %Email{email | html_body: " "})
+    else
+      body
+    end
+
+    body = if is_nil(email.subject) do
+      put_subject(body, %Email{email | subject: " "})
+    else
+      body
+    end
+
+    Map.put(body, "x-smtpapi", Poison.encode!(fields))
+  end
+  defp maybe_put_x_smtp_api(body, _), do: body
 
   defp put_addresses(body, field, addresses), do: Map.put(body, field, addresses)
   defp put_names(body, field, names) do

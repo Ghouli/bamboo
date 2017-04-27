@@ -4,8 +4,6 @@ defmodule Bamboo.MailgunAdapterTest do
   alias Bamboo.MailgunAdapter
 
   @config %{adapter: MailgunAdapter, api_key: "dummyapikey", domain: "test.tt"}
-  @config_with_bad_key %{@config | api_key: nil}
-  @config_with_bad_domain %{@config | domain: nil}
 
   defmodule FakeMailgun do
     use Plug.Router
@@ -20,7 +18,7 @@ defmodule Bamboo.MailgunAdapterTest do
     def start_server(parent) do
       Agent.start_link(fn -> Map.new end, name: __MODULE__)
       Agent.update(__MODULE__, &Map.put(&1, :parent, parent))
-      port = get_free_port
+      port = get_free_port()
       Application.put_env(:bamboo, :mailgun_base_uri, "http://localhost:#{port}/")
       Plug.Adapters.Cowboy.http __MODULE__, [], port: port, ref: __MODULE__
     end
@@ -51,7 +49,7 @@ defmodule Bamboo.MailgunAdapterTest do
   end
 
   setup do
-    FakeMailgun.start_server(self)
+    FakeMailgun.start_server(self())
 
     on_exit fn ->
       FakeMailgun.shutdown
@@ -73,20 +71,21 @@ defmodule Bamboo.MailgunAdapterTest do
   end
 
   test "deliver/2 sends the to the right url" do
-    new_email |> MailgunAdapter.deliver(@config)
+    new_email() |> MailgunAdapter.deliver(@config)
 
     assert_receive {:fake_mailgun, %{request_path: request_path}}
 
     assert request_path == "/test.tt/messages"
   end
 
-  test "deliver/2 sends from, html and text body, subject, and headers" do
+  test "deliver/2 sends from, subject, text body, html body and headers" do
     email = new_email(
       from: "from@foo.com",
       subject: "My Subject",
       text_body: "TEXT BODY",
       html_body: "HTML BODY",
     )
+    |> Email.put_header("X-My-Header", "my_header_value")
 
     MailgunAdapter.deliver(email, @config)
 
@@ -96,8 +95,9 @@ defmodule Bamboo.MailgunAdapterTest do
     assert params["subject"] == email.subject
     assert params["text"] == email.text_body
     assert params["html"] == email.html_body
+    assert params["h:X-My-Header"] == "my_header_value" 
 
-    hashed_token  = Base.encode64("api:" <> @config.api_key)
+    hashed_token = Base.encode64("api:" <> @config.api_key)
 
     assert {"authorization", "Basic #{hashed_token}"} in headers
   end
@@ -120,7 +120,7 @@ defmodule Bamboo.MailgunAdapterTest do
   test "raises if the response is not a success" do
     email = new_email(from: "INVALID_EMAIL")
 
-    assert_raise MailgunAdapter.ApiError, fn ->
+    assert_raise Bamboo.ApiError, fn ->
       email |> MailgunAdapter.deliver(@config)
     end
   end
