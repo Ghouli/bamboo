@@ -52,6 +52,9 @@ defmodule Bamboo.MandrillAdapter do
     end
   end
 
+  @doc false
+  def supports_attachments?, do: true
+
   defp get_key(config) do
     case Map.get(config, :api_key) do
       nil -> raise_api_key_error(config)
@@ -89,7 +92,8 @@ defmodule Bamboo.MandrillAdapter do
       subject: email.subject,
       text: email.text_body,
       html: email.html_body,
-      headers: email.headers
+      headers: email.headers,
+      attachments: attachments(email)
     }
     |> add_message_params(email)
   end
@@ -100,6 +104,18 @@ defmodule Bamboo.MandrillAdapter do
     end)
   end
   defp add_message_params(mandrill_message, _), do: mandrill_message
+
+  defp attachments(%{attachments: attachments}) do
+    attachments
+    |> Enum.reverse
+    |> Enum.map(fn(att) ->
+      %{
+        name: att.filename,
+        type: att.content_type,
+        content: Base.encode64(File.read!(att.path))
+      }
+    end)
+  end
 
   defp recipients(email) do
     []
